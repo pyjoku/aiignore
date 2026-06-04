@@ -1,0 +1,20 @@
+# Example .aiignore for a developer working directory.
+# Place this in ~/projects/ or your code-root.
+
+# Never let an agent read credentials or environment files.
+.env
+.env.*
+**/*.env
+**/*credentials*
+**/*secrets*
+**/id_rsa
+**/id_ed25519
+**/.ssh/**
+
+# Block writes inside production deployment configs (read OK for context).
+[mode:write] **/deploy/production/**
+[mode:write] **/k8s/prod/**
+
+# Never let the agent touch the user's git config.
+~/.gitconfig
+.git/config

@@ -1,0 +1,8 @@
+[tool.pytest.ini_options]
+# Tests live in hermes-plugin/tests/. The plugin folder uses a hyphen
+# (Hermes loads it by folder name) which prevents pytest from collecting
+# hermes-plugin/__init__.py as a Python package — so we scope collection
+# tightly to the tests folder.
+testpaths = ["hermes-plugin/tests"]
+python_files = ["test_*.py"]
+addopts = "--import-mode=importlib"
