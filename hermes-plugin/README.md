@@ -46,6 +46,7 @@ See [examples/](../examples/) at the repo root.
 | `AIIGNORE_MODE=warn` | Allow but log a warning |
 | `AIIGNORE_MODE=off` | Plugin loads but does nothing (kill switch) |
 | `AIIGNORE_AUDIT_LOG=<path>` | Override audit log location (default: `~/.hermes/logs/aiignore-blocks.log`) |
+| `AIIGNORE_ALLOW_POLICY_EDITS=1` | Allow the agent to write `.aiignore` / `.aiattributes` / `.aiignore-root`. **Off by default** — a policy the agent can rewrite is a policy it can silently dismantle. |
 
 ## Audit log
 

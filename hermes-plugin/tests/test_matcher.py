@@ -398,6 +398,88 @@ def test_walk_aiignore_beats_aiattributes_negation():
 
 
 # ---------------------------------------------------------------------------
+# Policy-file self-protection (v0.2.1)
+# ---------------------------------------------------------------------------
+
+
+def test_is_policy_file_recognises_all_three():
+    assert matcher.is_policy_file(Path("/some/dir/.aiignore"))
+    assert matcher.is_policy_file(Path("/some/dir/.aiattributes"))
+    assert matcher.is_policy_file(Path("/some/dir/.aiignore-root"))
+
+
+def test_is_policy_file_rejects_non_policy_files():
+    assert not matcher.is_policy_file(Path("/some/dir/notes.md"))
+    assert not matcher.is_policy_file(Path("/some/dir/aiignore"))  # no leading dot
+    assert not matcher.is_policy_file(Path("/some/dir/.gitignore"))
+
+
+def test_walk_blocks_write_to_aiignore_by_default():
+    with tempfile.TemporaryDirectory() as td:
+        target = Path(td) / ".aiignore"
+        target.write_text("patient/**\n", encoding="utf-8")
+
+        d = matcher.walk_and_decide(target, "write")
+        assert d.blocked is True
+        assert d.kind == "self-protect"
+
+
+def test_walk_blocks_write_to_aiattributes_by_default():
+    with tempfile.TemporaryDirectory() as td:
+        target = Path(td) / ".aiattributes"
+        target.write_text("* readonly\n", encoding="utf-8")
+
+        d = matcher.walk_and_decide(target, "write")
+        assert d.blocked is True
+        assert d.kind == "self-protect"
+
+
+def test_walk_blocks_write_to_aiignore_root_marker_by_default():
+    with tempfile.TemporaryDirectory() as td:
+        target = Path(td) / ".aiignore-root"
+        d = matcher.walk_and_decide(target, "write")
+        assert d.blocked is True
+        assert d.kind == "self-protect"
+
+
+def test_walk_allows_read_of_policy_files():
+    """The agent must be able to inspect what the policy is."""
+    with tempfile.TemporaryDirectory() as td:
+        target = Path(td) / ".aiignore"
+        target.write_text("patient/**\n", encoding="utf-8")
+
+        d = matcher.walk_and_decide(target, "read")
+        assert d.blocked is False
+
+
+def test_walk_allows_write_when_policy_edits_explicitly_enabled():
+    """allow_policy_edits=True opens the override for legitimate maintenance."""
+    with tempfile.TemporaryDirectory() as td:
+        target = Path(td) / ".aiignore"
+        target.write_text("old content\n", encoding="utf-8")
+
+        d = matcher.walk_and_decide(
+            target, "write", allow_policy_edits=True
+        )
+        assert d.blocked is False
+
+
+def test_self_protect_takes_priority_over_aiignore_negation():
+    """Even if a .aiignore negation would have allowed the write, the
+    self-protect check fires first."""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / ".aiignore").write_text(
+            "*\n!.aiignore\n", encoding="utf-8"
+        )
+        target = root / ".aiignore"  # the policy file itself
+
+        d = matcher.walk_and_decide(target, "write")
+        assert d.blocked is True
+        assert d.kind == "self-protect"
+
+
+# ---------------------------------------------------------------------------
 # classify_tool + extract_paths (unchanged from v0.1)
 # ---------------------------------------------------------------------------
 

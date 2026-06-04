@@ -35,9 +35,34 @@ __all__ = [
     "walk_and_decide",
     "READ_TOOLS",
     "WRITE_TOOLS",
+    "POLICY_FILE_NAMES",
+    "is_policy_file",
     "classify_tool",
     "extract_paths",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Policy-file self-protection
+# ---------------------------------------------------------------------------
+
+
+POLICY_FILE_NAMES: frozenset[str] = frozenset({
+    ".aiignore",
+    ".aiattributes",
+    ".aiignore-root",
+})
+
+
+def is_policy_file(path: Path) -> bool:
+    """True if the path's basename is one of the policy files this plugin
+    enforces (.aiignore, .aiattributes, .aiignore-root).
+
+    Used to refuse write-class operations on policy files by default, since
+    a policy file that the agent can edit is a policy that the agent can
+    silently dismantle.
+    """
+    return path.name in POLICY_FILE_NAMES
 
 
 # ---------------------------------------------------------------------------
@@ -374,10 +399,14 @@ def walk_and_decide(
     *,
     tool_name: Optional[str] = None,
     resolve_symlinks: bool = True,
+    allow_policy_edits: bool = False,
 ) -> Decision:
-    """Full evaluation: .aiignore first (absolute block), then .aiattributes.
+    """Full evaluation: policy-file self-protection → .aiignore → .aiattributes.
 
     Returns a Decision. tool_name is used for the `tool=` extension attribute.
+    When allow_policy_edits is False (default), write-class operations on
+    .aiignore / .aiattributes / .aiignore-root files are refused so the agent
+    cannot silently dismantle the policy.
     """
     if resolve_symlinks:
         try:
@@ -386,6 +415,16 @@ def walk_and_decide(
             target_path = target_path.absolute()
     else:
         target_path = target_path.absolute()
+
+    # ----- Phase 0: policy-file self-protection -----
+    if operation == "write" and not allow_policy_edits and is_policy_file(target_path):
+        return Decision(
+            blocked=True,
+            kind="self-protect",
+            rule_raw=f"policy-file write: {target_path.name}",
+            attribute="self-protect",
+            source_file=target_path,
+        )
 
     # ----- Phase 1: .aiignore -----
     nearest_ignore_block: Optional[tuple[Rule, Path]] = None

@@ -50,6 +50,14 @@ def _mode() -> str:
     return "block"
 
 
+def _allow_policy_edits() -> bool:
+    """When AIIGNORE_ALLOW_POLICY_EDITS=1, the agent is allowed to edit
+    .aiignore / .aiattributes / .aiignore-root files. Default is to refuse —
+    a policy the agent can rewrite is a policy the agent can dismantle."""
+    raw = os.environ.get("AIIGNORE_ALLOW_POLICY_EDITS", "").lower().strip()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _audit_log_path() -> Path:
     custom = os.environ.get("AIIGNORE_AUDIT_LOG")
     if custom:
@@ -136,8 +144,14 @@ def _on_pre_tool_call(
     if not paths:
         return None
 
+    allow_policy_edits = _allow_policy_edits()
     for path in paths:
-        decision = walk_and_decide(path, operation, tool_name=tool_name)
+        decision = walk_and_decide(
+            path,
+            operation,
+            tool_name=tool_name,
+            allow_policy_edits=allow_policy_edits,
+        )
         if decision.blocked:
             _write_audit_record(
                 tool_name=tool_name,
