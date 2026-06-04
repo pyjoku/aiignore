@@ -398,6 +398,52 @@ def test_walk_aiignore_beats_aiattributes_negation():
 
 
 # ---------------------------------------------------------------------------
+# Tilde expansion (v0.2.2 — regression fix)
+# ---------------------------------------------------------------------------
+
+
+def test_walk_expands_tilde_in_target_path(tmp_path, monkeypatch):
+    """Path objects containing a literal '~' must be expanded against $HOME
+    before walking — otherwise the policy is silently bypassed.
+
+    Regression: pathlib.Path.resolve() does NOT expand tilde on its own.
+    A caller passing Path('~/secret/file') would have walked the wrong tree
+    in versions <= 0.2.1, allowing the operation.
+    """
+    # Set HOME to a fresh temp dir so we have a known absolute equivalent
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    (secret / ".aiignore").write_text("*\n", encoding="utf-8")
+    target = secret / "file.txt"
+    target.write_text("x", encoding="utf-8")
+
+    # Caller passes tilde-prefixed path
+    tilde_path = Path("~/secret/file.txt")
+    d = matcher.walk_and_decide(tilde_path, "read")
+    assert d.blocked is True, (
+        "tilde path was not expanded — walk silently allowed the access"
+    )
+
+
+def test_walk_handles_tilde_when_resolve_disabled(tmp_path, monkeypatch):
+    """Same regression but with resolve_symlinks=False (raw mode)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    secret = tmp_path / "vault"
+    secret.mkdir()
+    (secret / ".aiignore").write_text("*\n", encoding="utf-8")
+    target = secret / "file.txt"
+    target.write_text("x", encoding="utf-8")
+
+    d = matcher.walk_and_decide(
+        Path("~/vault/file.txt"), "read", resolve_symlinks=False
+    )
+    assert d.blocked is True
+
+
+# ---------------------------------------------------------------------------
 # Policy-file self-protection (v0.2.1)
 # ---------------------------------------------------------------------------
 

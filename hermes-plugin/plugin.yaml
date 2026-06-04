@@ -1,5 +1,5 @@
 name: aiignore
-version: "0.2.1"
+version: "0.2.2"
 description: |
   Enforces .aiignore + .aiattributes — folder-local files that tell Hermes
   which paths it may not access (.aiignore, absolute block) and how access

@@ -353,6 +353,9 @@ def collect_attributes(
     markers) override distant ones. This matches gitattributes'
     "last match wins" semantics.
     """
+    # Expand tilde first — Path("~/...").resolve() does NOT expand $HOME on its
+    # own, so a caller passing a tilde path would silently bypass the policy.
+    target_path = Path(os.path.expanduser(str(target_path)))
     if resolve_symlinks:
         try:
             target_path = target_path.resolve()
@@ -408,6 +411,9 @@ def walk_and_decide(
     .aiignore / .aiattributes / .aiignore-root files are refused so the agent
     cannot silently dismantle the policy.
     """
+    # Expand tilde first — Path("~/...").resolve() does NOT expand $HOME on its
+    # own, so a caller passing a tilde path would silently bypass the policy.
+    target_path = Path(os.path.expanduser(str(target_path)))
     if resolve_symlinks:
         try:
             target_path = target_path.resolve()

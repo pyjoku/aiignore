@@ -232,6 +232,7 @@ Semantic versioning. Backward-incompatible changes increment the major version. 
 
 ## 15. Changelog
 
+- **0.2.2 (2026-06)** — Reference Hermes implementation: regression fix — `walk_and_decide` now expands tilde (`~/...`) in target paths before resolving. `pathlib.Path.resolve()` does NOT expand tilde, so direct callers passing tilde paths (e.g. from skill frontmatter `cwd: ~/...`) silently bypassed the policy in 0.2.x. Two new tests guard the regression.
 - **0.2.1 (2026-06)** — Reference Hermes implementation now refuses write-class operations on `.aiignore`, `.aiattributes`, and `.aiignore-root` files by default. An agent that can rewrite the policy can silently dismantle it. Override available via implementation-specific opt-in (env var `AIIGNORE_ALLOW_POLICY_EDITS=1` in the Hermes plugin). Reads of policy files remain allowed so the agent can introspect the policy. Spec text in §9.3 is unchanged (`SHOULD`); this is a default-stricter implementation choice.
 - **0.2 (2026-06)** — Split into `.aiignore` (absolute block, gitignore-only) and `.aiattributes` (modulated behavior, gitattributes-style). Removed `[mode:read]` / `[mode:write]` prefix from `.aiignore`. Added standard attributes `readonly`, `writeonly`, `noaccess`. Defined extension-attribute namespace convention. Tool-restriction (`tool=<name>`) added as recommended extension.
 - **0.1 (2026-06)** — Initial draft with mode-prefix inside `.aiignore`.
