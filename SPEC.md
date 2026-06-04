@@ -1,38 +1,62 @@
-# .aiignore — Specification
+# .aiignore + .aiattributes — Specification
 
-**Version:** 0.1 (draft)
+**Version:** 0.2 (draft)
 **Status:** Convention proposal + Hermes Agent reference implementation
 **License:** MIT
 
 ## 1. Purpose
 
-`.aiignore` is a per-folder file declaring filesystem paths an AI agent must not access. Implementations enforce this by intercepting the agent's filesystem tool calls and refusing operations whose target paths match an `.aiignore` rule.
+Two folder-local files declare AI-agent access boundaries to the surrounding filesystem:
 
-This document specifies the file format, the lookup algorithm, and the enforcement contract that conforming implementations must implement.
+- **`.aiignore`** — paths the agent must **not access at all** (read or write). Absolute block. Pattern-based, gitignore-syntax.
+- **`.aiattributes`** — paths whose access is **modulated** (read-only, write-only, tool-restricted, etc.). Pattern + attributes, gitattributes-syntax.
 
-## 2. File location and discovery
+The split mirrors git's separation:
 
-`.aiignore` is a plain UTF-8 text file named exactly `.aiignore` placed in any directory.
+| git's tool | what it does | our equivalent |
+|---|---|---|
+| `.gitignore` | exclude paths from tracking | `.aiignore` — exclude from AI access |
+| `.gitattributes` | set per-pattern attributes that modify behavior | `.aiattributes` — set per-pattern attributes that constrain AI behavior |
 
-For every filesystem operation on path `P`, the implementation MUST walk from `P`'s parent directory upward to the filesystem root, collecting `.aiignore` files in the order encountered (nearest-first). Each collected file's rules are evaluated against `P`, with paths interpreted **relative to the directory containing that `.aiignore` file.**
+Implementations enforce both files by intercepting the agent's filesystem tool calls and refusing operations that violate the rules.
+
+This document specifies file formats, lookup algorithm, and the enforcement contract.
+
+## 2. File discovery and walk algorithm
+
+Both `.aiignore` and `.aiattributes` are plain UTF-8 text files placed in any directory.
+
+For every filesystem operation on path `P`, the implementation MUST walk from `P`'s parent directory upward to the filesystem root, collecting both files in the order encountered (nearest-first). Each collected file's rules are evaluated against `P`, with paths interpreted **relative to the directory containing that file**.
 
 The walk terminates at:
 - The filesystem root (`/` on POSIX, drive root on Windows), OR
-- A directory containing a marker `.aiignore-root` file (sentinel that explicitly bounds the search — useful inside symlinks and chrooted setups).
+- A directory containing a marker `.aiignore-root` file.
 
-Implementations MAY cache `.aiignore` parse results but MUST invalidate the cache when the file's mtime changes.
+Implementations MAY cache parse results; they MUST invalidate the cache when the file's mtime changes.
 
-## 3. Pattern syntax
+## 3. Evaluation order
 
-Each non-empty, non-comment line in `.aiignore` is one rule.
+For each tool call:
+
+1. **Walk and check `.aiignore` first.** If any rule blocks the path, the operation is refused immediately with an `ignore` reason. Stop.
+2. **Walk and check `.aiattributes`.** Collect all matching attributes (nearest-first wins on conflict for the same attribute name). Apply the resulting attribute set to the operation:
+   - `readonly` → block write-class operations
+   - `writeonly` → block read-class operations
+   - `noaccess` → block all (redundant with `.aiignore`, but accepted)
+   - `tool=<name>` → block if the tool being used is not `<name>`
+   - Extension attributes → implementation-defined
+
+`.aiignore` is a hard block. `.aiattributes` is a modifier. An empty `.aiattributes` (or its absence) means no modification — the operation proceeds as if no policy existed.
+
+## 4. `.aiignore` format
+
+Each non-empty, non-comment line is one rule.
 
 ```
-<rule> ::= [<mode-prefix>] [<negation>] <pattern>
+<rule> ::= [<negation>] <pattern>
 ```
 
-### 3.1 Pattern (gitignore-compatible)
-
-The pattern follows gitignore glob semantics:
+Patterns follow **gitignore glob semantics**:
 
 | Token | Matches |
 |---|---|
@@ -43,161 +67,170 @@ The pattern follows gitignore glob semantics:
 | `[!abc]` | Any character except listed |
 | Literal | Itself |
 | Trailing `/` | Matches directories only |
-| Leading `/` | Anchors to the `.aiignore` directory's root (not the filesystem root) |
+| Leading `/` | Anchors to the `.aiignore` directory's root |
+| `!` prefix | Negation — explicitly allow even if a broader rule blocks |
 
-A pattern with no slash matches at any depth below the `.aiignore` file's location. A pattern containing a slash matches only at the location specified.
+`#` lines are comments. Blank lines are ignored.
 
-### 3.2 Negation
+Match in `.aiignore` = **absolute block, both read and write**. There is no mode prefix in `.aiignore` (v0.1 supported `[mode:read]` / `[mode:write]` — removed in v0.2 in favor of `.aiattributes`).
 
-A `!` prefix negates the rule — the matched path is **allowed** even if a broader rule earlier in the file blocks it. Negation order matters: later rules override earlier ones in the same file.
+## 5. `.aiattributes` format
 
-A negation cannot re-include a path inside a directory blocked by a parent pattern. This matches `.gitignore` semantics: you must not block `secret/` and try to allow `!secret/exception.md`.
+Each non-empty, non-comment line is one rule.
 
-### 3.3 Mode prefix
+```
+<rule> ::= <pattern> <whitespace> <attribute> [<whitespace> <attribute> …]
+<attribute> ::= <name> | <name>=<value> | -<name>
+```
 
-An optional `[mode:read]` or `[mode:write]` prefix restricts the rule to one operation class:
+- The first whitespace-delimited token is the **pattern** (same glob syntax as `.aiignore`).
+- Subsequent tokens are **attributes** applied to paths matching that pattern.
+- An attribute is one of:
+  - **Bare name** (e.g. `readonly`) — boolean flag, set true
+  - **Name=value** (e.g. `tool=obsidian-cli`) — typed value
+  - **-name** (e.g. `-readonly`) — unset/negate (allows overriding a broader rule at a nearer location)
+- `#` lines are comments. Blank lines are ignored.
 
-| Prefix | Rule applies to |
+When the same attribute appears multiple times across the walk, the **nearest** `.aiattributes` wins.
+
+## 6. Standard attributes (core)
+
+Conforming implementations MUST recognize and enforce these:
+
+| Attribute | Effect |
 |---|---|
-| (none) | Both read and write operations |
-| `[mode:read]` | Read operations only (read, glob, grep, stat) |
-| `[mode:write]` | Write operations only (write, edit, patch, delete, chmod) |
+| `readonly` | Block write-class operations on matching paths. Read-class operations proceed. |
+| `writeonly` | Block read-class operations on matching paths. Write-class operations proceed. |
+| `noaccess` | Block both read- and write-class operations (equivalent to listing the path in `.aiignore`). |
 
-The prefix is case-insensitive. Whitespace between the prefix and the pattern is permitted.
+These are the entire core. Implementations MAY add extension attributes (§7).
 
-### 3.4 Comments and blank lines
+## 7. Extension attributes
 
-Lines beginning with `#` are comments. Blank lines are ignored. Inline comments are NOT supported (a `#` mid-line is part of the pattern).
+Implementations MAY define additional attributes. To prevent naming collisions, extension attributes SHOULD use a `<namespace>=<value>` form where `<namespace>` is short and unambiguous within the implementation's domain.
 
-## 4. Operation classes
+Examples reserved for common extension patterns (not normative):
 
-For the purpose of mode matching, agent tools are grouped into two classes:
+| Attribute | Suggested meaning |
+|---|---|
+| `tool=<name>` | Access only allowed if the agent's tool name matches `<name>` |
+| `agent=<name>` | Access only allowed if the agent identity matches `<name>` |
+| `audit=<level>` | Audit-log this access at the specified level |
+| `time=<window>` | Access only allowed in the specified time window |
+| `<vendor>.<attr>=<value>` | Vendor-prefixed custom attribute |
+
+Implementations encountering an **unknown** attribute MUST NOT treat the rule as blocking on that ground alone — unknown attributes are silently ignored, so a `.aiattributes` file authored for one implementation remains forward-compatible with others.
+
+## 8. Operation classes
+
+For the purpose of `readonly` / `writeonly` matching, agent tools are grouped into two classes:
 
 **Read class** — operations that obtain content or metadata without modifying it:
-- `read_file`, `read`
-- `glob`, `find`
-- `grep`, `search`
-- `stat`, `ls`, `list_dir`
+- `read_file`, `read`, `glob`, `find`, `grep`, `search`, `stat`, `ls`, `list_dir`
 - Any tool whose effect is read-only
 
 **Write class** — operations that modify content or metadata:
-- `write_file`, `write`, `create`
-- `edit_file`, `edit`, `patch`, `apply_patch`
-- `delete`, `rm`, `unlink`
-- `move`, `rename`
-- `chmod`, `chown`
+- `write_file`, `write`, `create`, `edit_file`, `edit`, `patch`, `apply_patch`
+- `delete`, `rm`, `unlink`, `move`, `rename`, `chmod`, `chown`
 - Skill-management operations that produce or modify files
 
-Implementations MAY define additional tool-to-class mappings appropriate to their agent's tool surface.
+Implementations MAY extend these mappings appropriate to their agent's tool surface.
 
-## 5. Matching algorithm
+## 9. Enforcement contract
 
-For a filesystem operation `op` on path `P`:
-
-1. Determine `class = read_class(op) | write_class(op)`.
-2. Normalize `P` to an absolute path with symlinks resolved. (Implementations MAY make resolved-symlinks vs. raw-path matching configurable; default is resolved.)
-3. Walk from `parent(P)` upward to the filesystem root or `.aiignore-root` marker.
-4. At each visited directory `D`, if `D/.aiignore` exists:
-   - Parse it (or use cached result).
-   - Compute `R = relative_path(P, D)`.
-   - For each rule in `D/.aiignore`, in order:
-     - Skip if rule's mode prefix doesn't match `class`.
-     - Test rule's pattern against `R`.
-     - If the rule is a negation and matches, mark "allowed" for this `.aiignore`.
-     - If the rule is positive and matches, mark "blocked" for this `.aiignore`.
-   - The last marker set wins for this file.
-5. If any visited `.aiignore` ended in "blocked" and no nearer `.aiignore` ended in "allowed", the operation is **denied**.
-
-## 6. Enforcement contract
-
-When an operation is denied, the implementation MUST:
+When an operation is denied (by either `.aiignore` or by an attribute in `.aiattributes`), the implementation MUST:
 
 1. Refuse to execute the underlying agent tool call.
 2. Return to the agent a structured result containing:
-   - A clear human-readable reason ("path blocked by .aiignore rule")
-   - The matched `.aiignore` file path
-   - The matched rule (verbatim)
-3. Append an audit record to a log file (see §7) before returning.
+   - A clear human-readable reason
+   - The matched file path (`.aiignore` or `.aiattributes`)
+   - The matched rule (verbatim) AND, for `.aiattributes`, which attribute triggered the block
+3. Append an audit record before returning (§10).
 
-The agent SHOULD treat the denial as a normal tool failure and decide how to proceed (retry on a different path, ask the user, surface the issue, etc.).
+The agent SHOULD treat the denial as a normal tool failure.
 
-## 7. Audit log
+## 10. Audit log
 
-Implementations MUST write one record per denied operation to an audit log. The default location is implementation-defined (e.g. `~/.<agent>/logs/aiignore-blocks.log`). Each record contains:
+Implementations MUST write one record per denied operation. Each record contains:
 
 - ISO-8601 timestamp (UTC)
 - Tool name
 - Resolved target path
-- Matched `.aiignore` file
-- Matched rule text
-- Agent session or task ID (if available)
+- `policy_file` — path to the `.aiignore` or `.aiattributes` that triggered the block
+- `policy_kind` — `"ignore"` or `"attribute"`
+- For `.aiignore` blocks: `matched_rule`
+- For `.aiattributes` blocks: `matched_rule` AND `matched_attribute` (e.g. `"readonly"`, `"tool=obsidian-cli"`)
+- Mode (`block` / `warn`)
+- Agent session or task ID, if available
 
-The log format SHOULD be one JSON object per line for machine-readability.
+Log SHOULD be one JSON object per line.
 
-## 8. Modes
+## 11. Modes
 
 Implementations SHOULD provide three environmental modes:
 
 | Mode | Behavior |
 |---|---|
 | **block** (default) | Refuse the operation, return denial result, log |
-| **warn** | Allow the operation, append warning to tool result, log |
-| **off** | Plugin loads but performs no checks (kill switch) |
+| **warn** | Allow the operation, attach warning to the result, log |
+| **off** | Plugin loads but performs no checks |
 
 Mode SHOULD be controllable via an environment variable named `<IMPL>_AIIGNORE_MODE` or equivalent.
 
-## 9. Edge cases and implementation notes
+## 12. Edge cases
 
-### 9.1 Symlinks
+### 12.1 Symlinks
 
-Default: resolve symlinks before matching. This prevents bypass via a symlink from an unrestricted folder into a restricted one.
+Default: resolve symlinks before matching. Prevents bypass via a symlink from an unrestricted folder into a restricted one. Implementations MAY offer a raw-path mode (document the trade-off).
 
-Implementations MAY offer a "raw path" mode for the rare case where a symlink is the intended access route. Document the trade-off.
+### 12.2 Empty files
 
-### 9.2 Empty `.aiignore`
+An empty `.aiignore` or `.aiattributes` (no rules, only comments/blanks) is treated as if absent. The walk continues to parent directories.
 
-An `.aiignore` file with no rules (or only comments/blanks) is treated as if it did not exist. It does not bound the search; the walk continues to parent directories.
+### 12.3 Self-reference
 
-### 9.3 Self-reference
+Neither `.aiignore` nor `.aiattributes` is protected by its own rules unless explicitly listed. Implementations SHOULD internally protect both file types from being overwritten by the agent as a safety measure, even without explicit rules.
 
-`.aiignore` files themselves are not protected by their own rules unless explicitly listed. The implementation MAY internally protect `.aiignore` files from being overwritten by the agent as a safety measure, even without an explicit rule — but this is RECOMMENDED, not REQUIRED.
+### 12.4 Multi-path operations (glob, grep, find)
 
-### 9.4 Operations spanning multiple paths
+For tools that return multiple results, the implementation MUST apply the algorithm to each candidate path and filter blocked entries from the result silently — OR — block the operation entirely if any blocked path matches. The chosen behavior SHOULD be configurable; default is **filter silently** to preserve agent ergonomics.
 
-For tools like `glob`, `grep`, `find` that return multiple results, the implementation MUST apply the matching algorithm to each candidate path and filter blocked entries from the result silently — OR — block the operation entirely if any blocked path matches. The chosen behavior SHOULD be configurable; default is **filter silently** to preserve agent ergonomics.
+### 12.5 Bulk operations (move, copy)
 
-### 9.5 Bulk operations (move, copy)
+For source-and-destination operations, BOTH paths are checked. A blocked source OR a blocked destination causes the operation to be denied.
 
-For operations that involve both a source and destination, BOTH paths are checked. A blocked source OR a blocked destination causes the operation to be denied.
+### 12.6 Tool-restriction (`tool=<name>`) ambiguity
 
-### 9.6 No agent tool, raw shell
+The `tool=<name>` extension constrains *which agent tool* may operate on the path. The implementation MUST know its own tool's name (or an alias the user has configured) to match. If the matched tool name does not match the attribute, the operation is denied with reason `tool-restricted`.
 
-If the agent has a generic shell/terminal tool, the implementation cannot intercept individual file accesses inside the shell process. Implementations SHOULD either:
-- Restrict the shell tool's working directory, OR
-- Statically analyze the shell command for filesystem paths and block on match, OR
-- Document this limitation.
+### 12.7 Shell / terminal tool
 
-## 10. Conformance
+If the agent has a generic shell/terminal tool, the implementation cannot intercept individual file accesses inside the shell process. Implementations SHOULD either restrict the shell's working directory, statically analyze the command for filesystem paths, OR document this limitation.
+
+## 13. Conformance
 
 A conforming implementation MUST:
 
-- [ ] Parse the pattern syntax defined in §3
-- [ ] Implement the matching algorithm in §5
-- [ ] Refuse blocked operations as specified in §6
-- [ ] Write an audit log as specified in §7
-- [ ] Support at minimum the **block** and **off** modes
+- [ ] Parse `.aiignore` per §4 (gitignore semantics)
+- [ ] Parse `.aiattributes` per §5
+- [ ] Implement the walk + evaluation order per §3
+- [ ] Enforce all standard attributes from §6 (`readonly`, `writeonly`, `noaccess`)
+- [ ] Refuse blocked operations per §9
+- [ ] Write an audit log per §10
+- [ ] Silently ignore unknown extension attributes per §7
 
 A conforming implementation SHOULD:
 
-- [ ] Support the **warn** mode
-- [ ] Support the `[mode:read]` / `[mode:write]` prefix
-- [ ] Support the `.aiignore-root` walk terminator
+- [ ] Support `warn` and `off` modes
+- [ ] Support `.aiignore-root` walk terminator
 - [ ] Resolve symlinks by default
+- [ ] Implement at least one extension attribute relevant to its agent (commonly `tool=`)
 
-## 11. Versioning
+## 14. Versioning
 
-This spec follows semantic versioning. Backward-incompatible changes increment the major version. Implementations SHOULD declare the highest spec version they implement in their documentation.
+Semantic versioning. Backward-incompatible changes increment the major version. Implementations SHOULD declare the highest spec version they implement in their documentation.
 
-## 12. Changelog
+## 15. Changelog
 
-- **0.1 (2026-06)** — Initial draft.
+- **0.2 (2026-06)** — Split into `.aiignore` (absolute block, gitignore-only) and `.aiattributes` (modulated behavior, gitattributes-style). Removed `[mode:read]` / `[mode:write]` prefix from `.aiignore`. Added standard attributes `readonly`, `writeonly`, `noaccess`. Defined extension-attribute namespace convention. Tool-restriction (`tool=<name>`) added as recommended extension.
+- **0.1 (2026-06)** — Initial draft with mode-prefix inside `.aiignore`.

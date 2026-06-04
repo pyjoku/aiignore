@@ -1,19 +1,21 @@
-"""aiignore — Hermes Agent plugin enforcing the .aiignore convention.
+"""aiignore — Hermes Agent plugin enforcing the .aiignore + .aiattributes
+convention (spec v0.2).
 
 Wires one behaviour:
 
-* ``pre_tool_call`` hook — for each file-touching tool call, walks from the
-  target path up to the filesystem root collecting ``.aiignore`` files, then
-  matches the path against their rules. On match, refuses the tool call with
-  a clear reason and logs an audit record.
+* ``pre_tool_call`` hook — for each file-touching tool call:
+    1. Walk and check ``.aiignore`` (absolute block)
+    2. If allowed, walk and collect ``.aiattributes``; apply standard
+       attributes (``readonly``, ``writeonly``, ``noaccess``) and the
+       ``tool=<name>`` extension
 
 Modes (via environment variables):
 
 * ``AIIGNORE_MODE=block`` (default) — refuse blocked operations
-* ``AIIGNORE_MODE=warn`` — allow, but attach a warning in the result
+* ``AIIGNORE_MODE=warn`` — allow, but log a warning
 * ``AIIGNORE_MODE=off`` — kill switch, plugin loads but does nothing
 
-Implements the .aiignore convention v0.1 — see SPEC.md in this repo.
+Implements the .aiignore + .aiattributes convention v0.2 — see SPEC.md.
 """
 
 from __future__ import annotations
@@ -21,7 +23,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -38,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Mode handling
+# Mode + audit-log helpers
 # ---------------------------------------------------------------------------
 
 
@@ -57,11 +58,6 @@ def _audit_log_path() -> Path:
     return base / "logs" / "aiignore-blocks.log"
 
 
-# ---------------------------------------------------------------------------
-# Audit log
-# ---------------------------------------------------------------------------
-
-
 def _write_audit_record(
     *,
     tool_name: str,
@@ -70,19 +66,20 @@ def _write_audit_record(
     mode: str,
     task_id: Optional[str],
 ) -> None:
-    record = {
+    record: dict[str, Any] = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "tool": tool_name,
         "path": str(target_path),
         "mode": mode,
         "task_id": task_id or "",
+        "policy_kind": decision.kind or "",
     }
-    if decision.rule is not None:
-        record["matched_rule"] = decision.rule.raw
-        record["matched_pattern"] = decision.rule.pattern
-        record["matched_mode"] = decision.rule.mode or "both"
+    if decision.rule_raw is not None:
+        record["matched_rule"] = decision.rule_raw
+    if decision.attribute is not None:
+        record["matched_attribute"] = decision.attribute
     if decision.source_file is not None:
-        record["matched_source"] = str(decision.source_file)
+        record["policy_file"] = str(decision.source_file)
 
     log_path = _audit_log_path()
     try:
@@ -93,28 +90,21 @@ def _write_audit_record(
         logger.warning("aiignore: failed to write audit log: %s", exc)
 
 
-# ---------------------------------------------------------------------------
-# Decision formatting
-# ---------------------------------------------------------------------------
-
-
-def _format_block_message(
-    target_path: Path, decision: Decision
-) -> str:
-    rule_text = decision.rule.raw if decision.rule else "(unknown)"
-    source = (
-        str(decision.source_file)
-        if decision.source_file is not None
-        else "(unknown)"
-    )
+def _format_block_message(target_path: Path, decision: Decision) -> str:
+    rule = decision.rule_raw or "(unknown)"
+    source = str(decision.source_file) if decision.source_file else "(unknown)"
+    kind = decision.kind or "policy"
+    attr_line = ""
+    if decision.attribute:
+        attr_line = f"  Attr:    {decision.attribute}\n"
     return (
-        f"⚠️ Path blocked by .aiignore rule.\n"
+        f"⚠️ Path blocked by .{kind} rule.\n"
         f"  Target:  {target_path}\n"
-        f"  Rule:    {rule_text}\n"
+        f"  Rule:    {rule}\n"
+        f"{attr_line}"
         f"  Source:  {source}\n"
-        f"This path is outside the policy for AI tool access. "
-        f"If you believe this is wrong, the user can edit the .aiignore "
-        f"file or disable the plugin with AIIGNORE_MODE=off."
+        f"This path is outside the AI tool access policy. "
+        f"The user can edit the policy file or set AIIGNORE_MODE=off to disable."
     )
 
 
@@ -140,7 +130,6 @@ def _on_pre_tool_call(
 
     operation = classify_tool(tool_name)
     if operation is None:
-        # Unknown tool — don't intercept
         return None
 
     paths = extract_paths(tool_name, args or {})
@@ -148,7 +137,7 @@ def _on_pre_tool_call(
         return None
 
     for path in paths:
-        decision = walk_and_decide(path, operation)
+        decision = walk_and_decide(path, operation, tool_name=tool_name)
         if decision.blocked:
             _write_audit_record(
                 tool_name=tool_name,
@@ -160,18 +149,16 @@ def _on_pre_tool_call(
             message = _format_block_message(path, decision)
             if mode == "block":
                 return {"block": True, "reason": message}
-            # warn mode: don't block, but attach warning via transform_tool_result
-            # would be cleaner; for v0.1 we surface a log line.
             logger.warning("aiignore [warn]: %s", message)
     return None
 
 
 # ---------------------------------------------------------------------------
-# Hermes plugin entry point
+# Plugin registration
 # ---------------------------------------------------------------------------
 
 
 def register(ctx) -> None:
     """Called by Hermes at plugin load time."""
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
-    logger.info("aiignore plugin loaded (mode=%s)", _mode())
+    logger.info("aiignore plugin loaded (mode=%s, spec=v0.2)", _mode())

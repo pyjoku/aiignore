@@ -1,20 +1,14 @@
-# Example .aiignore for an Obsidian vault holding mixed-sensitivity content.
-# Place this at the vault root.
+# Example .aiignore for an Obsidian vault.
+# Place at the vault root. Match = absolute block (read + write).
 
-# Block sensitive subtrees outright (both read and write).
+# Block sensitive subtrees outright
 patient/**
 Finanzen/**
 private-*/**
 Tagebuch/**
 
-# Allow agents to read family notes (e.g. for context), but never write.
-[mode:write] Familie/**
-
-# Never overwrite Obsidian's internal state files.
+# Never overwrite Obsidian internal state
 .obsidian/workspace.json
 .obsidian/workspaces.json
 
-# Allow agents to write into a designated workspace folder even if a parent
-# pattern would otherwise block it. (Note: gitignore-style negation has limits —
-# this only works if the parent folder isn't directly blocked.)
-!_safe/**
+# For nuanced rules (readonly, writeonly, tool-restriction), use .aiattributes

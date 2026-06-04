@@ -1,88 +1,114 @@
-# .aiignore
+# .aiignore + .aiattributes
 
-> **A folder-local convention for telling AI agents which paths they may not read or write.**
+> **Folder-local conventions for telling AI agents which paths they may not access (`.aiignore`) and how access is modulated (`.aiattributes`).**
 
-`.aiignore` is to AI agents what `.gitignore` is to git: a familiar, self-documenting, per-folder file that declares what is off-limits. Drop one in any folder; agents that understand the convention will respect it.
+These files are to AI agents what `.gitignore` + `.gitattributes` are to git: familiar, self-documenting, per-folder, version-controllable. Drop them in any folder; agents that understand the convention will respect them.
 
-## Why this exists
+| File | What it does | Inspired by |
+|---|---|---|
+| **`.aiignore`** | Lists paths the agent must NOT access at all (read or write). Absolute block. | `.gitignore` |
+| **`.aiattributes`** | Lists paths and attributes constraining HOW the agent accesses them — `readonly`, `writeonly`, `tool=name`, etc. | `.gitattributes` |
 
-AI coding agents and personal assistants increasingly have direct filesystem access — read, write, edit, glob, grep. As the surface grows, so does the risk of an agent silently reading sensitive material or writing into a folder it shouldn't touch.
+## Why two files
 
-The current options are unsatisfying:
+`.aiignore` answers a yes/no question: may the agent touch this path at all? `.aiattributes` answers a how question: if it may touch this, under what constraints? The split mirrors git's split — and for the same reason: collapsing both into one file makes both harder to read.
 
-- **Prompt-level exclusions** are not enforced — the model may ignore or forget them.
-- **OS file permissions** are heavy: per-user, per-process, hard to scope per workflow.
-- **Per-agent custom config** locks you into one agent.
+## Quick example
 
-`.aiignore` is portable, familiar, granular, and lives next to the data it protects. Move the folder, the protection moves with it. Sync it via Dropbox/Nextcloud/git, the protection syncs.
+```bash
+# Vault root: keep patient + finance data completely off-limits
+cat > .aiignore <<'EOF'
+patient/**
+Finanzen/**
+EOF
+
+# Vault root: PDFs read-only, /bank read-only, /skills only via obsidian-cli
+cat > .aiattributes <<'EOF'
+*.pdf          readonly
+/bank/**       readonly
+/skills/**     tool=obsidian-cli
+EOF
+```
+
+The agent now:
+- Cannot read or write anything under `patient/` or `Finanzen/`
+- Can read PDFs but cannot edit/overwrite/delete them
+- Can read `/bank/**` but cannot modify
+- Can only operate on `/skills/**` via the `obsidian-cli` tool — raw `write_file` is refused
 
 ## How it works
 
-When an agent is about to perform a filesystem operation on path `P`, it walks from `P` up toward the filesystem root, collecting `.aiignore` files along the way. The patterns in those files are evaluated against `P`'s path relative to each file's location. If any pattern matches, the operation is blocked.
+When an agent is about to perform a filesystem operation on path `P`:
 
-```
-File on disk:                       What it means:
+1. **Walk up `.aiignore`.** From `P`'s parent directory to filesystem root, collect every `.aiignore`. If any rule matches → operation blocked. Stop.
+2. **Walk up `.aiattributes`.** Collect attributes from every matching rule. Nearer files override distant ones.
+3. **Apply attributes** to the operation class (read/write):
+   - `readonly` → block writes
+   - `writeonly` → block reads
+   - `noaccess` → block both
+   - `tool=X` → block if the tool being used isn't `X`
 
-Vault/
-├── .aiignore                       # rules for the whole vault
-├── patient/
-│   ├── .aiignore                   # extra rules just for /patient
-│   └── records.md                  # ← agent calls read_file on this
-└── _safe/
-    └── note.md                     # ← agent calls write_file on this
-```
-
-For `read_file Vault/patient/records.md`, the agent checks:
-1. `Vault/patient/.aiignore` — does any pattern match `records.md`?
-2. `Vault/.aiignore` — does any pattern match `patient/records.md`?
-
-If yes at any step → block.
-
-For `write_file Vault/_safe/note.md`, the same walk happens; if no pattern matches, allowed.
+See [SPEC.md](./SPEC.md) for the full specification (v0.2).
 
 ## Pattern syntax
 
-`.aiignore` uses gitignore-style glob syntax with three additions:
+Both files use **gitignore-style globs**:
 
-| Pattern | Meaning |
+| Token | Matches |
 |---|---|
-| `*` | Block everything in this folder and all subfolders |
-| `*.md` | Block only files matching the glob |
-| `patient/**` | Block a subfolder and everything inside it |
-| `!exception.md` | Negate: explicitly allow this even if a broader rule blocks it |
-| `[mode:read] secret*` | Mode prefix: this rule only applies to reads |
-| `[mode:write] *` | Mode prefix: only writes are blocked (reads still allowed) |
-| `# comment` | Comments and blank lines are ignored |
+| `*` | any chars except `/` |
+| `**` | any directory levels |
+| `?` | one char except `/` |
+| `[abc]` | one of the listed chars |
+| Leading `/` | anchored to file's directory |
+| Trailing `/` | directories only |
 
-Without a `[mode:...]` prefix, a rule blocks both reads and writes.
-
-See [SPEC.md](./SPEC.md) for the full pattern-matching semantics including edge cases.
-
-## Example
-
-A top-level `.aiignore` for an Obsidian vault that contains a mix of public notes, patient records, and finances:
+`.aiignore` adds `!` for negation:
 
 ```
-# Block sensitive subtrees outright
 patient/**
-Finanzen/**
-private-*/**
-
-# Allow reads in family notes, but block writes
-[mode:write] Familie/**
-
-# Never overwrite Obsidian's workspace state
-.obsidian/workspace.json
+!patient/_anonymized/**
 ```
 
-More examples in [examples/](./examples/).
+`.aiattributes` adds `-name` to unset an attribute set by a more-distant rule:
+
+```
+# root/.aiattributes
+/sub/**         readonly
+
+# root/sub/exception/.aiattributes
+*               -readonly
+```
+
+## Standard attributes (core spec)
+
+Every conforming implementation supports these:
+
+| Attribute | Effect |
+|---|---|
+| `readonly` | Block write-class operations (write, edit, patch, delete, move, rename, chmod). Reads proceed. |
+| `writeonly` | Block read-class operations (read, glob, grep, find, stat). Writes proceed. |
+| `noaccess` | Block both classes (equivalent to listing in `.aiignore`, kept for symmetry). |
+
+## Extension attributes (recommended, namespace-based)
+
+Implementations MAY define additional attributes. Unknown attributes are silently ignored — your `.aiattributes` stays forward-compatible.
+
+Common recommended extensions:
+
+| Attribute | Suggested meaning |
+|---|---|
+| `tool=<name>` | Path may only be touched via the named agent tool |
+| `agent=<name>` | Path may only be touched by the named agent identity |
+| `audit=<level>` | Extra audit-logging for matching accesses |
+| `time=<window>` | Time-of-day restriction |
 
 ## Reference implementations
 
 | Agent | Status | Location |
 |---|---|---|
-| **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** (Nous Research) | ✅ working | [`hermes-plugin/`](./hermes-plugin/) |
-| Claude Code (Anthropic) | 🟡 planned (via hook) | — |
+| **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** (Nous Research) | ✅ v0.2 spec, 33 tests green | [`hermes-plugin/`](./hermes-plugin/) |
+| Claude Code (Anthropic) | 🟡 planned via PreToolUse hook | — |
 | Cowork / Knowledge Work | 🟡 planned | — |
 | OpenClaw | 🟡 planned | — |
 
@@ -90,15 +116,33 @@ Pull requests for additional implementations welcome.
 
 ## Design principles
 
-1. **Default-permissive.** No `.aiignore` → no restriction. Same posture as `.gitignore`.
-2. **Local to the data.** No central config file to forget about. The protection lives in the folder it protects.
-3. **Portable.** Move a folder → the protection moves with it. Sync via git/Dropbox/Nextcloud → the protection syncs.
-4. **Block, don't warn.** When a pattern matches, the operation is refused with a clear reason in the tool result. The agent gets feedback and can self-correct or surface to the user.
-5. **Audit by default.** Every block event should be logged so the user can verify the policy is doing what they intended.
+1. **Default-permissive.** No `.aiignore` / `.aiattributes` → no restriction. Same posture as gitignore/gitattributes.
+2. **Local to the data.** No central config. The policy lives with the folder it protects.
+3. **Portable.** Move/copy/sync the folder → the policy moves with it.
+4. **Block, don't warn.** When matched, the operation is refused. The agent receives the reason in the tool result and can self-correct or surface to the user.
+5. **Audit by default.** Every block event is logged so the user can verify the policy is doing what they intended.
+6. **Familiar.** Same glob syntax as gitignore. Attribute syntax mirrors gitattributes.
+
+## Related work / acknowledgments
+
+This convention emerged from multiple independent implementations grappling with the same problem. We aim to converge the syntax and semantics into one canonical spec rather than fragment further:
+
+- [ItzBubschki/aiignore](https://github.com/ItzBubschki/aiignore) — npm `@aiignore/cli`, Claude Code hook (gitignore syntax, no attributes layer)
+- JetBrains Junie (AI Assistant in IntelliJ/PyCharm) — proprietary native support; gitignore syntax with explicit known limitations (file-name leakage, Brave Mode bypass)
+- [LIT-Protocol/Vincent](https://github.com/LIT-Protocol/Vincent/blob/main/.aiignore) — real-world `.aiignore` from a JetBrains project
+- [Naman Jain, "aiignore: the next gitignore"](https://www.linkedin.com/pulse/aiignore-next-gitignore-we-cant-afford-ignore-naman-jain-3owxc/) — strategic case for the convention
+- [JetBrains LLM-21159](https://youtrack.jetbrains.com/projects/LLM/issues/LLM-21159) — public issue acknowledging effectiveness gaps in their implementation
+
+What this repo contributes:
+
+- A **canonical spec** that's tool-agnostic (the spec docs are not Hermes-specific)
+- The **two-file split** (`.aiignore` for blocks + `.aiattributes` for modulation) — gitattributes-style attributes are absent from the other implementations
+- A **block-by-default enforcement model** (not approval prompts that can be bypassed)
+- A **working Hermes reference implementation** with full test coverage
 
 ## Status
 
-This is a v0.1 convention draft plus a reference implementation for Hermes Agent. The spec may evolve based on feedback before stabilizing.
+v0.2 draft. The spec may evolve based on cross-implementation feedback. Production use is encouraged for the Hermes plugin; treat the spec as stable enough to build against but expect minor refinement.
 
 ## License
 

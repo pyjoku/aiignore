@@ -1,12 +1,12 @@
 name: aiignore
-version: "0.1.0"
+version: "0.2.0"
 description: |
-  Enforces .aiignore files — folder-local rules that tell Hermes which paths
-  it may not read or write. Walks from each tool-call target path up to the
-  filesystem root, collecting .aiignore files; matches gitignore-style globs
-  with optional [mode:read] / [mode:write] prefixes; refuses the operation
-  with a clear reason when any pattern matches. Conforming implementation
-  of the .aiignore convention spec v0.1.
+  Enforces .aiignore + .aiattributes — folder-local files that tell Hermes
+  which paths it may not access (.aiignore, absolute block) and how access
+  is modulated (.aiattributes — readonly, writeonly, noaccess, tool=name).
+  Walks from each tool-call target path up to the filesystem root. .aiignore
+  uses gitignore syntax. .aiattributes uses gitattributes suffix-style.
+  Conforming implementation of the convention spec v0.2.
 author: "Jochen Kulow"
 license: "MIT"
 homepage: "https://github.com/pyjoku/aiignore"

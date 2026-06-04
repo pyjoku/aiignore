@@ -1,6 +1,11 @@
-# aiignore — Hermes Agent plugin
+# aiignore — Hermes Agent plugin (v0.2)
 
-Reference implementation of the [`.aiignore` convention](../README.md) for [Hermes Agent](https://github.com/NousResearch/hermes-agent).
+Reference implementation of the [`.aiignore` + `.aiattributes` convention v0.2](../README.md) for [Hermes Agent](https://github.com/NousResearch/hermes-agent).
+
+Enforces two file types:
+
+- **`.aiignore`** — absolute block (gitignore syntax)
+- **`.aiattributes`** — modulated behavior: `readonly`, `writeonly`, `noaccess`, `tool=<name>`
 
 ## Install
 
@@ -12,17 +17,22 @@ ln -s "$(pwd)" ~/.hermes/plugins/aiignore
 hermes plugins enable aiignore
 ```
 
-## Configure — drop `.aiignore` files where you want them
+## Configure — drop `.aiignore` and/or `.aiattributes` files
 
 ```bash
-# Example: block the AI from touching patient data in an Obsidian vault
+# .aiignore = absolute block (no read, no write)
 cat > ~/obsidianvaults/MyVault/patient/.aiignore <<'EOF'
 *
 EOF
 
-# Example: block writes only, allow reads
-cat > ~/obsidianvaults/MyVault/Family/.aiignore <<'EOF'
-[mode:write] *
+# .aiattributes = readonly (block writes, allow reads)
+cat > ~/obsidianvaults/MyVault/Family/.aiattributes <<'EOF'
+*    readonly
+EOF
+
+# .aiattributes = tool-restriction
+cat > ~/obsidianvaults/MyVault/skills/.aiattributes <<'EOF'
+*    tool=obsidian-cli
 EOF
 ```
 

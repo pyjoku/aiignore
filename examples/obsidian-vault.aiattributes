@@ -1,0 +1,24 @@
+# Example .aiattributes for an Obsidian vault.
+# Place at the vault root. Pattern + attribute(s) per line.
+
+# PDFs: AI can read them for context, but never overwrite/edit/delete
+*.pdf                    readonly
+
+# Bank statements folder: read-only
+/bank/**                 readonly
+
+# Family notes: read-only (AI can use as context, can't modify)
+/Familie/**              readonly
+
+# Skills folder may only be touched via the obsidian-cli tool, not raw writes
+/skills/**               tool=obsidian-cli
+
+# Inbox: write-only (AI drops drafts, can't read older drafts to avoid
+# self-contamination)
+/+/inbox/**              writeonly
+
+# Lock files: extra audit logging on every access
+*.lock                   readonly audit=high
+
+# Override readonly on a specific allowed write location
+/Calendar/drafts/**      -readonly

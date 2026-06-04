@@ -1,0 +1,15 @@
+# Example .aiattributes for a developer working directory.
+
+# Production deployment configs — read OK for context, never overwrite
+/**/deploy/production/**     readonly
+/**/k8s/prod/**              readonly
+/**/terraform/prod/**        readonly
+
+# Lock files — read OK, write blocked, extra audit
+**/package-lock.json         readonly audit=high
+**/poetry.lock               readonly audit=high
+**/Cargo.lock                readonly audit=high
+
+# Build artifacts — agent may not touch (writeonly would corrupt CI output)
+/**/dist/**                  noaccess
+/**/build/**                 noaccess
